@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.DS_Store
+
+# Benchmark outputs
+benchmarks/results/
+benchmarks/figures/
+
+# Private working docs -- decision log and build plan, not published
+DESIGN.md
+SPEC.md

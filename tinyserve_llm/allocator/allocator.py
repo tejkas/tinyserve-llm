@@ -5,7 +5,7 @@ from collections import deque
 
 import torch
 
-from kv_cache_manager.allocator.block import PhysicalBlock
+from tinyserve_llm.allocator.block import PhysicalBlock
 
 logger = logging.getLogger(__name__)
 
