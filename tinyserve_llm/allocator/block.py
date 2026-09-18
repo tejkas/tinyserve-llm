@@ -7,7 +7,6 @@ from dataclasses import dataclass, field
 @dataclass
 class PhysicalBlock:
     block_id: int
-    block_size: int
     ref_count: int = 1 # Set default to 1 -> allocation implies ownership and the existence of at least 1 request
     num_filled: int = 0
 
@@ -24,9 +23,6 @@ class PhysicalBlock:
         if self.ref_count <= 0:
             raise ValueError(f"Cannot decrement ref on a free block {self.block_id}")
         self.ref_count -= 1
-    
-    def is_full(self) -> bool:
-        return self.num_filled == self.block_size
 
 # Per-sequence page table, maps position of a token in a given sequence -> physical block
 @dataclass
@@ -45,12 +41,16 @@ class BlockTable:
     def num_blocks(self) -> int:
         return len(self.blocks)
     
-    def append_blocks(self, block: PhysicalBlock):
+    def append_block(self, block: PhysicalBlock) -> None:
         self.blocks.append(block)
 
-    # Basically asks whether there are blocks for another token
+    def last_block_num_filled(self) -> int:
+        """Slots used in the last block, or 0 when the table is empty."""
+        return self.blocks[-1].num_filled if self.blocks else 0
+
+    # Whether the last block still has room for one more token.
     def can_append_token(self) -> bool:
-        return bool(self.blocks) and not self.blocks[-1].is_full()
+        return bool(self.blocks) and self.last_block_num_filled() < self.block_size
 
     def get_block_ids(self) -> list[int]:
         return [b.block_id for b in self.blocks]
