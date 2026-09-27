@@ -1,4 +1,4 @@
-"""Naive PyTorch paged attention. The correctness oracle for flash-attn backend.."""
+"""Naive PyTorch paged attention. The CPU correctness oracle for the flash-attn backend."""
 
 from __future__ import annotations
 

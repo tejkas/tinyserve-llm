@@ -4,13 +4,12 @@ from dataclasses import dataclass, field
 
 # Analogue of a page frame, but similar to what vLLM does with GPU HBM memory
 # discrete unit of memory that holds KVs
-@dataclass
+@dataclass(slots=True)
 class PhysicalBlock:
     block_id: int
-    ref_count: int = 1 # Set default to 1 -> allocation implies ownership and the existence of at least 1 request
+    ref_count: int  # no default: blocks are built free (0) and take ownership in reset()
     num_filled: int = 0
 
-    # if no refs -> block is "free"
     def is_free(self) -> bool:
         return self.ref_count == 0
     
@@ -23,6 +22,18 @@ class PhysicalBlock:
         if self.ref_count <= 0:
             raise ValueError(f"Cannot decrement ref on a free block {self.block_id}")
         self.ref_count -= 1
+
+    def reset(self) -> None:
+        """Re-arm a recycled block.
+
+        Called when a block is handed out, never when it is freed. A freed block's
+        KV stays valid until it is reused, so a later request with the same prefix
+        can still claim it: freeing marks a block evictable, not invalid. Moving
+        this into free() would destroy cache entries at the earliest possible
+        moment instead of the latest.
+        """
+        self.ref_count = 1
+        self.num_filled = 0
 
 # Per-sequence page table, maps position of a token in a given sequence -> physical block
 @dataclass

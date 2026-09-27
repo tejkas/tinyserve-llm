@@ -3,7 +3,9 @@ from __future__ import annotations
 from tinyserve_llm.allocator.block import BlockTable, PhysicalBlock
 from tinyserve_llm.allocator.allocator import BlockAllocator
 
-# Creates a deep copy of a BlockTable
+# Branches a sequence without copying any KV: the new table points at the same
+# physical blocks and every block gains a reference. Memory is only copied later,
+# and only for a block that is actually written to -- see cow_write.
 def fork_sequence(
         src_table: BlockTable,
         allocator: BlockAllocator,
@@ -35,5 +37,7 @@ def cow_write(
     dst_k.copy_(src_k)
     dst_v.copy_(src_v)
 
-    block.decrement_ref()
+    # Release through the allocator rather than touching ref_count here, so the
+    # rule for returning a block to the free list lives in exactly one place.
+    allocator.free(block)
     return new_block

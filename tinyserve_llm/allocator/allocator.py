@@ -41,16 +41,18 @@ class BlockAllocator:
         # metadata. Every block is usable -- there is no reserved sentinel, because
         # padded rows are skipped at the point of writing rather than redirected.
         self.free_blocks: deque[int] = deque(range(num_blocks))
-        # map block_id -> PhysicalBlock
-        self.blocks: dict[int, PhysicalBlock] = {}
+        self.blocks: list[PhysicalBlock] = [
+            PhysicalBlock(block_id=i, ref_count=0) for i in range(num_blocks)
+        ]
 
     def allocate(self) -> PhysicalBlock:
         if not self.free_blocks:
             raise MemoryError("Out of Free Blocks!")
         
         block_id = self.free_blocks.popleft()
-        block = PhysicalBlock(block_id=block_id)
-        self.blocks[block_id] = block
+        block = self.blocks[block_id]
+        assert block.ref_count == 0, f"block {block_id} was free but has references"
+        block.reset()
 
         logger.debug("Allocated block %d (%d free)", block_id, len(self.free_blocks))
         return block
@@ -58,8 +60,7 @@ class BlockAllocator:
     def free(self, block: PhysicalBlock) -> None:
         block.decrement_ref()
         if block.is_free():
-            # if this block is free, return it to the free list
-            del self.blocks[block.block_id]
+            # Contents are deliberately left intact -- see PhysicalBlock.reset.
             self.free_blocks.append(block.block_id)
             logger.debug("Freed block %d (%d free)", block.block_id, len(self.free_blocks))
     

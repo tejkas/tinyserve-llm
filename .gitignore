@@ -12,3 +12,4 @@ benchmarks/figures/
 # Private working docs -- decision log and build plan, not published
 DESIGN.md
 SPEC.md
+DELTAS.md
