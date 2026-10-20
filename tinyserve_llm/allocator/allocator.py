@@ -37,9 +37,7 @@ class BlockAllocator:
             device=device
         )
 
-        # Only the block_ids are queued, not PhysicalBlock objects: those are CPU-side
-        # metadata. Every block is usable -- there is no reserved sentinel, because
-        # padded rows are skipped at the point of writing rather than redirected.
+        # Only the block_ids are queued, not PhysicalBlock objects (those are CPU-side)
         self.free_blocks: deque[int] = deque(range(num_blocks))
         self.blocks: list[PhysicalBlock] = [
             PhysicalBlock(block_id=i, ref_count=0) for i in range(num_blocks)

@@ -33,8 +33,7 @@ def store_kv(
 
     Padded rows carry slot ``-1`` and are skipped. On CUDA this is a per-thread early
     return in the Triton store kernel; on CPU the fallback below masks them out, where
-    a data-dependent shape costs nothing. There is no sentinel block.
-
+    a data-dependent shape costs nothing.
     Both caches are modified in place; nothing is returned.
     """
     num_kv_heads, head_dim = k.shape[1], k.shape[2]

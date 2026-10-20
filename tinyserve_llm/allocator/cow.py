@@ -5,7 +5,7 @@ from tinyserve_llm.allocator.allocator import BlockAllocator
 
 # Branches a sequence without copying any KV: the new table points at the same
 # physical blocks and every block gains a reference. Memory is only copied later,
-# and only for a block that is actually written to -- see cow_write.
+# and only for a block that is actually written to - see cow_write.
 def fork_sequence(
         src_table: BlockTable,
         allocator: BlockAllocator,
