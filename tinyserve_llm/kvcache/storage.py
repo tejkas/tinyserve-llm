@@ -25,6 +25,7 @@ class KVStorage:
     def copy_slots(self, src_block: int, dst_block: int, num_slots: int) -> None:
         """
         Used for copy-on-write and partial-block reuse.
+        The caller may release the source block as soon as this returns.
         """
         assert num_slots <= self.block_size
         self.k_pool[dst_block, :num_slots].copy_(self.k_pool[src_block, :num_slots])
