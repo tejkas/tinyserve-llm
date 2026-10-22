@@ -101,7 +101,7 @@ class PageTree:
         tokens = tuple(tokens)
         old = node.tokens
         assert len(old) < len(tokens) <= self.block_size, "strictly requires more tokens than what already exists in this PageNode"
-        assert tokens[:len(old)] == old, "tokens should share some exact prefix as what already exists in this PageNode"
+        assert tokens[:len(old)] == old, "tokens should contain an exact prefix as what already exists in this PageNode"
         parent = node.parent
         assert parent is not None, "root PageNode cannot grow"
         existing = parent.children.get(tokens)
