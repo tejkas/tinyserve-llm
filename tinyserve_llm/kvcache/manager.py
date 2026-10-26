@@ -160,7 +160,7 @@ class KVCacheManager:
 
     def _cost(self, match: Match, source: PageNode | None, num_tokens: int) -> AdmissionCost:
         """
-        Checks what allocating this sequence would take from the free block pool. 
+        Checks what allocating this new sequence would take from the free block pool. 
         """
         refs = self.ref_counts
         pages = match.pages
@@ -203,5 +203,27 @@ class KVCacheManager:
             block_table.append(self._take_block())
         seq.token_ids.extend(token_ids)
 
+    def blocks_needed_for_append(self, seq_id: int, num_tokens: int) -> int:
+        """
+        Blocks needed for appending `num_tokens` to this sequence.
+        When this value is <= num_available_blocks(), allocate_slots succeeds.
+        """
+        seq = self.seqs[seq_id]
+        table = seq.block_table
+        blocks = -(-(seq.reserved + num_tokens) // self.block_size) - len(table)
+        if seq.reserved % self.block_size and self.ref_counts[table[-1]] > 1:
+            blocks += 1 # If this sequence is sharing its last block, then we need an additional block to copy it before writing
+        return blocks
 
-        
+    def append_slots(self, seq_id: int, token_ids: Sequence[int]) -> None:
+        """
+        Reserves slots needed for the tokens fed into this sequence for this step
+        (for decode: 1; for speculative decoding: >1)
+        Invoked once per step, per sequence, and needs to be finalized with commit().
+        """
+        assert token_ids, "a step needs at least one token"
+        seq = self.seqs[seq_id]
+        assert seq.reserved == seq.committed, "the previous step was not successfully committed"
+        needed = self.blocks_needed_for_append(seq_id, len(token_ids))
+        assert needed <= self.num_available_blocks(), "not enough free blocks; preemption needed"
+        self._reserve(seq, token_ids)
