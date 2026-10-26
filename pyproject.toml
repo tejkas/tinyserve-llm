@@ -7,7 +7,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# flash-attn is CUDA-only; the allocator and the PyTorch reference run without it.
+# flash-attn is CUDA-only; the KV cache manager and the PyTorch reference run without it.
 # Install with: pip install -e ".[cuda]" --no-build-isolation
 cuda = [
     "flash-attn >= 2.6",

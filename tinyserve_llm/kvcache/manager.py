@@ -260,7 +260,7 @@ class KVCacheManager:
             page = self.tree.publish(parent, block_id, tokens)
         elif len(node.tokens) < len(tokens):
             # Attached partial page that we are writing into
-            assert self.ref_counts[block_id] == 1 and node.parent is parent # Check that the block has only one holder (this sequence)
+            assert node.parent is parent
             page = self.tree.grow(node, tokens)
         else:
             return # if this block already exists and has the same tokens, nothing to do

@@ -3,9 +3,10 @@
 A mini vLLM built around its KV cache — a small, readable inference engine in which memory
 management is the first-class concern.
 
-> **Status:** in development. Block allocator, copy-on-write and the KV write path are
-> implemented. Prefix cache, offload, scheduler and engine are in progress, and the benchmark
-> numbers below are placeholders until measured.
+> **Status:** in development. The KV cache manager (paged blocks, prefix cache with partial-block
+> reuse, copy-on-write forking, speculative rollback) and the KV write path are implemented.
+> Offload, scheduler and engine are in progress, and the benchmark numbers below are placeholders
+> until measured.
 
 ## Key Features
 
@@ -24,7 +25,7 @@ management is the first-class concern.
 
 ```bash
 pip install -e ".[cuda]" --no-build-isolation   # Linux, CUDA, Ampere or newer
-pip install -e ".[dev]"                         # CPU only — allocator, prefix cache, tests
+pip install -e ".[dev]"                         # CPU only — KV cache manager, tests
 ```
 
 ## Manual Download
