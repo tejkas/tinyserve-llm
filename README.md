@@ -10,11 +10,15 @@ management is the first-class concern.
 ## Key Features
 
 * 🔍 **Token-granular prefix reuse** — reuses a cached prefix down to the token, not just whole blocks
-* 🌿 **Copy-on-write forking** — parallel sampling and beam search share KV until they diverge
+* 🌿 **Copy-on-write forking** — parallel samples share KV until they diverge
 * 💾 **CPU offload** — moves KV to pinned host memory under pressure instead of recomputing it
 * 🎯 **Cache-aware scheduling** — orders requests by cache hit ratio, with aging to bound starvation
 * 🧩 **Clean boundary** — the engine talks to the cache through one explicit interface
 * 📖 **Readable** — ~2,300 lines, with flash-attn doing the attention math
+
+### Future features
+
+* **Beam search** — the cache already supports it (fork survivors, release dead beams); the engine side is not built yet
 
 ## Installation
 

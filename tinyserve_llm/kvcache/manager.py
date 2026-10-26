@@ -249,7 +249,7 @@ class KVCacheManager:
     def _publish_block(self, seq: SeqState, i: int):
         """
         Publish block i's committed tokens in the tree, under its parent page (aka block i-1 or root).
-        If the tree already contains a page with these tokens, dedupe by releasing this page and switching to that one.
+        If the tree already contains a page with these tokens, dedupe by releasing this block and switching to that one.
         """
         block_table = seq.block_table
         block_id = block_table[i]
@@ -269,3 +269,29 @@ class KVCacheManager:
             self._increment_ref(page.block_id)
             block_table[i] = page.block_id
             self._decrement_ref(block_id)
+
+    def release(self, seq_id: int) -> None:
+        """
+        Drop a finished or preempted sequence.
+        We still store its KV in the page tree for future matching.
+        """
+        seq = self.seqs[seq_id]
+        assert seq.reserved == seq.committed, "release between steps: commit first"
+        if seq.committed % self.block_size:
+            self._publish_block(seq, seq.committed // self.block_size) # publish the tail block to store the full KV in the page tree for matching
+        del self.seqs[seq_id]
+        for block_id in reversed(seq.block_table): # go in order of tail first
+            self._decrement_ref(block_id)
+
+    def fork(self, src_id: int, new_id: int) -> None:
+        """
+        Start `new_id` as a copy of `src_id`. Used for parallel sampling.
+        """
+        assert new_id not in self.seqs, "sequence is already allocated"
+        src = self.seqs[src_id]
+        assert src.reserved == src.committed, "fork between steps: commit first"
+        for block_id in src.block_table:
+            self._increment_ref(block_id)
+        self.seqs[new_id] = SeqState(
+            block_table=list(src.block_table), token_ids=list(src.token_ids), committed=src.committed
+        )
