@@ -227,3 +227,45 @@ class KVCacheManager:
         needed = self.blocks_needed_for_append(seq_id, len(token_ids))
         assert needed <= self.num_available_blocks(), "not enough free blocks; preemption needed"
         self._reserve(seq, token_ids)
+
+    def commit(self, seq_id: int, num_accepted: int) -> None:
+        """
+        Closes a step by keeping the KV of the first `num_accepted` slots reserved since the last commit. Drops the rest.
+        Used for speculative decoding (to drop tokens rejected by the verifier).
+        Finally, publishes every block that is full.
+        """
+        seq = self.seqs[seq_id]
+        assert 0 <= num_accepted <= seq.reserved - seq.committed, "cannot accept more slots than those reserved"
+        old_committed = seq.committed
+        seq.committed += num_accepted
+        # Rollback rejected tokens
+        del seq.token_ids[seq.committed:]
+        blocks_kept = -(-seq.committed // self.block_size)
+        while len(seq.block_table) > blocks_kept:
+            self._decrement_ref(seq.block_table.pop()) # release holds on blocks that are no longer needed
+        for i in range(old_committed // self.block_size, seq.committed // self.block_size):
+            self._publish_block(seq, i) # Publish new full blocks
+
+    def _publish_block(self, seq: SeqState, i: int):
+        """
+        Publish block i's committed tokens in the tree, under its parent page (aka block i-1 or root).
+        If the tree already contains a page with these tokens, dedupe by releasing this page and switching to that one.
+        """
+        block_table = seq.block_table
+        block_id = block_table[i]
+        parent = self.tree.nodes[block_table[i-1]] if i else self.tree.root
+        tokens = seq.token_ids[i * self.block_size : min((i + 1) * self.block_size, seq.committed)] # grab tokens from the start of the block until commit point/end of block
+        node = self.tree.nodes.get(block_id)
+        if node is None:
+            page = self.tree.publish(parent, block_id, tokens)
+        elif len(node.tokens) < len(tokens):
+            # Attached partial page that we are writing into
+            assert self.ref_counts[block_id] == 1 and node.parent is parent # Check that the block has only one holder (this sequence)
+            page = self.tree.grow(node, tokens)
+        else:
+            return # if this block already exists and has the same tokens, nothing to do
+
+        if page.block_id != block_id: # If there is an existing page that dupes this block, dedupe
+            self._increment_ref(page.block_id)
+            block_table[i] = page.block_id
+            self._decrement_ref(block_id)
