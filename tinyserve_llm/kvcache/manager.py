@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
@@ -27,6 +27,21 @@ class AdmissionCost:
     blocks_needed: int # can allocate if this is <= num_available_blocks()
     prefill_tokens: int # prompt tokens the forward pass needs to compute
 
+@dataclass(slots=True)
+class CacheStats:
+    """
+    Running totals since the manager was created; diff two snapshots for one step's counts.
+    """
+    evictions: int = 0
+    cow_copies: int = 0      # shared last block copied before a write
+    partial_copies: int = 0  # matched slots copied out of a partially matching page at admission
+    publishes: int = 0       # new pages added to the tree
+    dedupes: int = 0         # blocks swapped for an identical page already in the tree
+
+    # Current values, not totals; filled in by stats()
+    blocks_in_use: int = 0
+    cached_pages: int = 0
+
 class KVCacheManager:
     """
     Managed KV Cache metadata, including:
@@ -36,7 +51,7 @@ class KVCacheManager:
     - per-sequence state
     """
 
-    def __init__(self, storage: KVStorage) -> None:
+    def __init__(self, storage: KVStorage, caching: bool = True) -> None:
         self.storage = storage
         self.block_size = storage.block_size
         self.tree = PageTree(self.block_size)
@@ -46,6 +61,8 @@ class KVCacheManager:
         self.free_uncached_blocks = list(range(self.num_blocks - 1, -1, -1)) # reverse-order, pop() vends block 0 first
         self.num_free_cached = 0
         self._clock = 0 # Tracks LRU with monotonically increasing global counter
+        self.caching = caching # default True, but refuses trie publshing if False
+        self.counters = CacheStats()
 
     def num_available_blocks(self) -> int:
         """
@@ -77,6 +94,7 @@ class KVCacheManager:
         )
         assert victim is not None, "no free blocks. Caller must check num_available_blocks() first."
         self.num_free_cached -= 1
+        self.counters.evictions += 1
         return self.tree.evict(victim)
 
     def _increment_ref(self, block_id: int) -> None:
@@ -135,6 +153,7 @@ class KVCacheManager:
             self._increment_ref(source.block_id) # same as above - hold before take
             dest = self._take_block()
             self.storage.copy_slots(source.block_id, dest, match.partial_len)
+            self.counters.partial_copies += 1
             self._decrement_ref(source.block_id) # copy_slots allows release the moment it returns
             seq.block_table.append(dest)
         seq.committed = match.num_tokens
@@ -193,6 +212,7 @@ class KVCacheManager:
             if self.ref_counts[last_block] > 1: # sharing case -> copy on write
                 new_block = self._take_block()
                 self.storage.copy_slots(last_block, new_block, last_block_used_slots)
+                self.counters.cow_copies += 1
                 self._decrement_ref(last_block)
                 block_table[-1] = new_block
             else: # our block, write in place
@@ -243,8 +263,9 @@ class KVCacheManager:
         blocks_kept = -(-seq.committed // self.block_size)
         while len(seq.block_table) > blocks_kept:
             self._decrement_ref(seq.block_table.pop()) # release holds on blocks that are no longer needed
-        for i in range(old_committed // self.block_size, seq.committed // self.block_size):
-            self._publish_block(seq, i) # Publish new full blocks
+        if self.caching:
+            for i in range(old_committed // self.block_size, seq.committed // self.block_size):
+                self._publish_block(seq, i) # Publish new full blocks
 
     def _publish_block(self, seq: SeqState, i: int):
         """
@@ -258,6 +279,7 @@ class KVCacheManager:
         node = self.tree.nodes.get(block_id)
         if node is None:
             page = self.tree.publish(parent, block_id, tokens)
+            self.counters.publishes += 1
         elif len(node.tokens) < len(tokens):
             # Attached partial page that we are writing into
             assert node.parent is parent
@@ -266,6 +288,7 @@ class KVCacheManager:
             return # if this block already exists and has the same tokens, nothing to do
 
         if page.block_id != block_id: # If there is an existing page that dupes this block, dedupe
+            self.counters.dedupes += 1
             self._increment_ref(page.block_id)
             block_table[i] = page.block_id
             self._decrement_ref(block_id)
@@ -277,7 +300,7 @@ class KVCacheManager:
         """
         seq = self.seqs[seq_id]
         assert seq.reserved == seq.committed, "release between steps: commit first"
-        if seq.committed % self.block_size:
+        if self.caching and seq.committed % self.block_size:
             self._publish_block(seq, seq.committed // self.block_size) # publish the tail block to store the full KV in the page tree for matching
         del self.seqs[seq_id]
         for block_id in reversed(seq.block_table): # go in order of tail first
@@ -295,3 +318,10 @@ class KVCacheManager:
         self.seqs[new_id] = SeqState(
             block_table=list(src.block_table), token_ids=list(src.token_ids), committed=src.committed
         )
+
+    def stats(self) -> CacheStats:
+        """
+        A snapshot: the running totals plus current block usage.
+        """
+        return replace(self.counters, blocks_in_use=self.num_blocks - self.num_available_blocks(),
+                       cached_pages=len(self.tree.nodes))
