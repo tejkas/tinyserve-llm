@@ -31,8 +31,9 @@ pip install -e ".[dev]"                         # CPU only — KV cache manager,
 ## Manual Download
 
 ```bash
-huggingface-cli download --resume-download Qwen/Qwen3-0.6B \
-  --local-dir ~/models/Qwen3-0.6B
+huggingface-cli login   # Llama 3.2 is gated: accept Meta's licence on its model page first
+huggingface-cli download --resume-download meta-llama/Llama-3.2-1B-Instruct \
+  --local-dir ~/models/Llama-3.2-1B-Instruct
 ```
 
 ## Quick Start
@@ -40,7 +41,7 @@ huggingface-cli download --resume-download Qwen/Qwen3-0.6B \
 ```python
 from tinyserve_llm import LLM, SamplingParams
 
-llm = LLM("~/models/Qwen3-0.6B")
+llm = LLM("~/models/Llama-3.2-1B-Instruct")
 params = SamplingParams(temperature=0.8, max_tokens=256)
 
 outputs = llm.generate(["Explain paged attention in one paragraph."], params)
@@ -49,7 +50,7 @@ print(outputs[0]["text"])
 
 ## Benchmark
 
-**Configuration:** RTX 4090, Qwen3-0.6B, 256 sequences, input and output lengths sampled
+**Configuration:** H100, Llama 3.2 1B Instruct, 256 sequences, input and output lengths sampled
 uniformly from 100–1024 tokens.
 
 | Engine | Output tokens | Time (s) | Throughput (tok/s) |
