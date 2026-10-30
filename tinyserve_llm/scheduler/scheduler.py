@@ -5,7 +5,6 @@ import math
 from dataclasses import dataclass
 from typing import Literal, NamedTuple
 
-from tinyserve_llm.kvcache.manager import KVCacheManager
 from tinyserve_llm.scheduler.sequence import SamplingParams, Sequence, SequenceStatus
 from tinyserve_llm.kvcache.manager import AdmissionCost, KVCacheManager
 
@@ -17,7 +16,7 @@ class SchedulerConfig:
     max_num_batched_tokens: int = 16384
     eos_token_id: int = -1
     # Ranking: score = hit + wait_weight * wait_seconds. A large wait_weight gives first come, first served.
-    wait_weight: float = 0.1  # 10 s of waiting counts as much as a fully cached prompt. In other words, 10s is the cap on wait
+    wait_weight: float = 0.1  # 10 s of waiting counts as much as a fully cached prompt
     hit_mode: Literal["absolute", "ratio"] = "absolute" # Use longest cached token length
     max_skip_wait: float = 5.0 # A top candidate that does not fit is skipped until it has waited this long
     watermark: float = 0.01  # fraction of all blocks kept free at admission
@@ -31,6 +30,10 @@ class ScheduledSeq(NamedTuple):
     seq: Sequence
     token_ids: list[int]  # per step token ids, their positions start at seq.num_tokens - len(token_ids)
     num_samples: int = 1  # n on a group's first prefill, so the sampler draws every sample's first token
+
+class RequestOutput(NamedTuple):
+    request_id: int
+    sequences: list[Sequence]  # all n samples, each with outputs, finish reason and timestamps
 
 class Scheduler:
     def __init__(self, config: SchedulerConfig, kv: KVCacheManager) -> None:
@@ -58,6 +61,8 @@ class Scheduler:
         max_blocks = -(-max_len // self.kv.block_size) + (params.n - 1) + self.watermark_blocks
         if max_blocks > self.kv.num_blocks:
             raise ValueError(f"needs up to {max_blocks} blocks; the KV cache has {self.kv.num_blocks}")
+        if params.n > self.config.max_num_seqs:
+            raise ValueError(f"n = {params.n} samples exceed max_num_seqs")
 
         request_id = next(self._request_ids)
         seq = Sequence(next(self._seq_ids), request_id, tuple(prompt_token_ids), params, arrival_time)
@@ -141,6 +146,7 @@ class Scheduler:
         then admission stops for this step, so the memory that frees up goes to it.
         """
         admitted: list[ScheduledSeq] = []
+        owed_forks = 0 # forks of groups admitted earlier in this step (forking happens in postprocess())
         for seq, cost, hit in self._rank_waiting(now):
             token_ids = seq.all_token_ids
             if admitted:  # an earlier admission this step may have evicted pages this hit counted on
@@ -151,8 +157,8 @@ class Scheduler:
             num_forks = seq.params.n - 1 if first_of_group else 0
             fits = (
                 cost.prefill_tokens <= budget
-                and len(self.running) + 1 + num_forks <= self.config.max_num_seqs
-                and cost.blocks_needed + num_forks + self.watermark_blocks <= self.kv.num_available_blocks()
+                and len(self.running) + owed_forks + 1 + num_forks <= self.config.max_num_seqs
+                and cost.blocks_needed + owed_forks + num_forks + self.watermark_blocks <= self.kv.num_available_blocks()
             )
             if not fits:
                 if now - seq.arrival_time >= self.config.max_skip_wait:
@@ -161,6 +167,7 @@ class Scheduler:
             assert self.kv.allocate(seq.seq_id, token_ids) is not None  # the fit check used a fresh cost
             fed = token_ids[self.kv.num_cached_tokens(seq.seq_id):]
             budget -= len(fed)
+            owed_forks += num_forks
             seq.status = SequenceStatus.RUNNING
             seq.admission_hit = hit
             self.running.append(seq)
@@ -169,3 +176,62 @@ class Scheduler:
             chosen = {s.seq.seq_id for s in admitted}
             self.waiting = [s for s in self.waiting if s.seq_id not in chosen]
         return admitted
+
+    def _fork(self, parent: Sequence) -> Sequence:
+        """
+        A new sample of the parent's request, sharing its prompt KV
+        """
+        assert not parent.output_token_ids
+        child = Sequence(next(self._seq_ids), parent.request_id, parent.prompt_token_ids, parent.params,
+                         parent.arrival_time, status=SequenceStatus.RUNNING, admission_hit=parent.admission_hit)
+        self.kv.fork(parent.seq_id, child.seq_id)
+        self.running.append(child)
+        self.groups[parent.request_id].append(child)
+        return child
+
+    def _finish_reason(self, seq: Sequence, token: int) -> Literal["eos", "length"] | None:
+        if token == self.config.eos_token_id and not seq.params.ignore_eos:
+            return "eos"
+        if len(seq.output_token_ids) >= seq.params.max_tokens:
+            return "length"
+        return None
+
+    def _collect(self, finished: list[Sequence]) -> list[RequestOutput]:
+        """
+        Requests whose samples have all finished.
+        """
+        outputs = []
+        for request_id in dict.fromkeys(s.request_id for s in finished):  # dedupe, keep order
+            group = self.groups[request_id]
+            if all(s.status is SequenceStatus.FINISHED for s in group):
+                outputs.append(RequestOutput(request_id, self.groups.pop(request_id)))
+        return outputs
+
+    def postprocess(self, scheduled: list[ScheduledSeq], sampled: list[list[int]], now: float) -> list[RequestOutput]:
+        """
+        Finishes the step by:
+        - Committing each sequence's slots
+        - Forking a group's samples after the first prefill
+        - Recording the new tokens
+        - Releasing finished sequences
+        """
+        finished: list[Sequence] = []
+        for (seq, token_ids, num_samples), tokens in zip(scheduled, sampled, strict=True):
+            assert len(tokens) == num_samples
+            self.kv.commit(seq.seq_id, len(token_ids)) # 1 for decode, the uncached prompt for prefill
+            samples = [seq] + [self._fork(seq) for _ in range(num_samples - 1)] # fork parent into n-1 samples
+            for sample, token in zip(samples, tokens):
+                sample.output_token_ids.append(token)
+                if sample.first_token_time is None:
+                    sample.first_token_time = now
+                reason = self._finish_reason(sample, token)
+                if reason is not None:
+                    self.kv.release(sample.seq_id)
+                    sample.status = SequenceStatus.FINISHED
+                    sample.finish_reason = reason
+                    sample.finish_time = now
+                    finished.append(sample)
+        if finished:
+            done = {s.seq_id for s in finished}
+            self.running = [s for s in self.running if s.seq_id not in done]
+        return self._collect(finished)
