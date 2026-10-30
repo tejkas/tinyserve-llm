@@ -3,10 +3,10 @@ from __future__ import annotations
 import itertools
 import math
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, NamedTuple
 
 from tinyserve_llm.kvcache.manager import KVCacheManager
-from tinyserve_llm.scheduler.sequence import SamplingParams, Sequence
+from tinyserve_llm.scheduler.sequence import SamplingParams, Sequence, SequenceStatus
 from tinyserve_llm.kvcache.manager import AdmissionCost, KVCacheManager
 
 
@@ -27,6 +27,10 @@ class SchedulerConfig:
         # Decodes take their share of the budget first, so a maximum-length prompt must still fit beside them
         assert self.max_num_batched_tokens >= self.max_model_len + self.max_num_seqs, "a maximum-length prompt could never be scheduled"
 
+class ScheduledSeq(NamedTuple):
+    seq: Sequence
+    token_ids: list[int]  # per step token ids, their positions start at seq.num_tokens - len(token_ids)
+    num_samples: int = 1  # n on a group's first prefill, so the sampler draws every sample's first token
 
 class Scheduler:
     def __init__(self, config: SchedulerConfig, kv: KVCacheManager) -> None:
@@ -90,3 +94,78 @@ class Scheduler:
     def _running_score(self, seq: Sequence, now: float) -> float:
         """A running sequence keeps its admission-time hit; its wait keeps growing."""
         return self._score(seq.admission_hit, seq, now)
+
+    def schedule(self, now: float) -> list[ScheduledSeq]:
+        """
+        Builds one step. Mixed prefill-decode: every running sequence decodes, then prefills fill the remaining token
+        budget.
+        """
+        budget = self.config.max_num_batched_tokens
+        if self.config.step_mode == "prefill_first": # a prefill-only step whenever anything waiting fits, else a decode-only step.
+            return self._admit(now, budget) or self._schedule_decodes(now)
+        decodes = self._schedule_decodes(now)
+        return decodes + self._admit(now, budget - len(decodes))
+
+    def _schedule_decodes(self, now: float) -> list[ScheduledSeq]:
+        """
+        Gives each running sequence one slot, highest score first. When the pool runs short, preempts the
+        lowest-scoring sequence not yet scheduled this step, or the sequence itself if none is left.
+        """
+        queue = sorted(self.running, key=lambda s: self._running_score(s, now))  # lowest score first
+        scheduled: list[ScheduledSeq] = []
+        self.running = []
+        while queue:
+            seq = queue.pop()  # highest score left
+            # Recheck after every preemption: releasing a sibling can drop this sequence's copy-on-write need
+            while self.kv.blocks_needed_for_append(seq.seq_id, 1) > self.kv.num_available_blocks() and queue:
+                self._preempt(queue.pop(0))
+            if self.kv.blocks_needed_for_append(seq.seq_id, 1) > self.kv.num_available_blocks():
+                self._preempt(seq)  # queue is empty, nothing ranked lower is left to give up its blocks
+                break
+            self.kv.append_slots(seq.seq_id, [seq.pending_token])
+            scheduled.append(ScheduledSeq(seq, [seq.pending_token]))
+            self.running.append(seq)
+        return scheduled
+
+    def _preempt(self, seq: Sequence) -> None:
+        """Preempt by dropping the KV, requeue with outputs and arrival time kept."""
+        self.kv.release(seq.seq_id)
+        seq.status = SequenceStatus.WAITING
+        seq.num_preemptions += 1
+        self.waiting.append(seq)
+
+    def _admit(self, now: float, budget: int) -> list[ScheduledSeq]:
+        """
+        Admits waiting sequences, best score first, within the token budget, the sequence cap and the
+        watermark. A candidate that does not fit is skipped, unless it has waited max_skip_wait seconds,
+        then admission stops for this step, so the memory that frees up goes to it.
+        """
+        admitted: list[ScheduledSeq] = []
+        for seq, cost, hit in self._rank_waiting(now):
+            token_ids = seq.all_token_ids
+            if admitted:  # an earlier admission this step may have evicted pages this hit counted on
+                cost = self.kv.calculate_admission_cost(token_ids)
+                hit = self._hit(len(token_ids), cost)
+            # A group's parent forks after its first prefill -> n sequences and n - 1 copies of the last block
+            first_of_group = seq.params.n > 1 and not seq.output_token_ids
+            num_forks = seq.params.n - 1 if first_of_group else 0
+            fits = (
+                cost.prefill_tokens <= budget
+                and len(self.running) + 1 + num_forks <= self.config.max_num_seqs
+                and cost.blocks_needed + num_forks + self.watermark_blocks <= self.kv.num_available_blocks()
+            )
+            if not fits:
+                if now - seq.arrival_time >= self.config.max_skip_wait:
+                    break  # stop skipping past a sequence that has waited this long
+                continue
+            assert self.kv.allocate(seq.seq_id, token_ids) is not None  # the fit check used a fresh cost
+            fed = token_ids[self.kv.num_cached_tokens(seq.seq_id):]
+            budget -= len(fed)
+            seq.status = SequenceStatus.RUNNING
+            seq.admission_hit = hit
+            self.running.append(seq)
+            admitted.append(ScheduledSeq(seq, fed, seq.params.n if first_of_group else 1))
+        if admitted:
+            chosen = {s.seq.seq_id for s in admitted}
+            self.waiting = [s for s in self.waiting if s.seq_id not in chosen]
+        return admitted
