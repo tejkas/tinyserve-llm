@@ -480,20 +480,43 @@ def test_release_after_fork_grows_a_page_its_siblings_share():
 # --- real storage ----------------------------------------------------------------------------
 
 
-def test_partial_match_copies_real_kv_tensors():
-    storage = KVStorage(num_blocks=4, num_kv_heads=1, head_dim=2, block_size=B,
-                        dtype=torch.float32, device="cpu")
+def real_storage(num_blocks: int = 4, num_layers: int = 3) -> KVStorage:
+    return KVStorage(num_blocks=num_blocks, num_layers=num_layers, num_kv_heads=1, head_dim=2, block_size=B,
+                     dtype=torch.float32, device="cpu")
+
+
+def test_partial_match_copies_real_kv_tensors_in_every_layer():
+    storage = real_storage()
     m = KVCacheManager(storage)
     m.allocate(1, [1, 2, 3])
     src = m.seqs[1].block_table[0]
-    storage.k_pool[src, :3] = torch.tensor([[[1.0, 1.0]], [[2.0, 2.0]], [[3.0, 3.0]]])
-    storage.v_pool[src, :3] = -storage.k_pool[src, :3]
+    storage.k_pool[src, :, :3] = torch.arange(18.0).view(3, 3, 1, 2)  # different KV in each layer
+    storage.v_pool[src, :, :3] = -storage.k_pool[src, :, :3]
     m.commit(1, 3)
     m.release(1)
     dst = m.allocate(2, [1, 2, 9, 9])[0]
     assert dst != src
-    torch.testing.assert_close(storage.k_pool[dst, :2], storage.k_pool[src, :2])
-    torch.testing.assert_close(storage.v_pool[dst, :2], storage.v_pool[src, :2])
+    torch.testing.assert_close(storage.k_pool[dst, :, :2], storage.k_pool[src, :, :2])
+    torch.testing.assert_close(storage.v_pool[dst, :, :2], storage.v_pool[src, :, :2])
+    assert not storage.k_pool[dst, :, 2:].any(), "only the matched slots are copied"
+
+
+def test_layer_views_write_through_to_the_pool():
+    storage = real_storage()
+    k, v = storage.layer(1)
+    assert k.shape == (4, B, 1, 2) and k.data_ptr() == storage.k_pool[:, 1].data_ptr()
+    assert not k.is_contiguous(), "a layer slice of a block-first pool is strided"
+    k[2, 3] = 7.0
+    v[0, 0] = -7.0
+    assert storage.k_pool[2, 1, 3].tolist() == [[7.0, 7.0]] and storage.k_pool.sum() == 14.0
+    assert storage.v_pool[0, 1, 0].tolist() == [[-7.0, -7.0]]
+
+
+def test_bytes_per_block_matches_the_allocated_pool():
+    storage = real_storage(num_blocks=5)
+    pool_bytes = sum(t.numel() * t.element_size() for t in (storage.k_pool, storage.v_pool))
+    assert KVStorage.bytes_per_block(3, 1, 2, B, torch.float32) * 5 == pool_bytes
+    assert KVStorage.bytes_per_block(3, 1, 2, B, torch.bfloat16) * 2 == KVStorage.bytes_per_block(3, 1, 2, B, torch.float32)
 
 
 # --- random workload -------------------------------------------------------------------------

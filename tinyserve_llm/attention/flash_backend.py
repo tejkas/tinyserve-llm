@@ -36,7 +36,6 @@ def store_kv(
     a data-dependent shape costs nothing.
     Both caches are modified in place; nothing is returned.
     """
-    num_kv_heads, head_dim = k.shape[1], k.shape[2]
 
     # Padded rows carry slot -1 and must not be written. Masking has a data-dependent
     # output shape, which on CUDA would force a host sync -- that is why the CUDA path
@@ -44,8 +43,10 @@ def store_kv(
     # device to synchronise with, so masking here is free.
     valid = slot_mapping >= 0
     slots = slot_mapping[valid]
+    block_size = k_cache.shape[1]
+    blocks, offsets = slots // block_size, slots % block_size
 
-    # view(), not reshape(): the pool is contiguous, and view() raises if that ever
-    # stops being true. reshape() would silently write into a copy and drop the data.
-    k_cache.view(-1, num_kv_heads, head_dim)[slots] = k[valid]
-    v_cache.view(-1, num_kv_heads, head_dim)[slots] = v[valid]
+    # Index block and offset separately instead of flattening: the cache is a strided layer view of the
+    # block-first pool, which view(-1, ...) cannot flatten. Indexed assignment writes through the view.
+    k_cache[blocks, offsets] = k[valid]
+    v_cache[blocks, offsets] = v[valid]

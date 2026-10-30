@@ -78,3 +78,24 @@ def test_store_kv_pairs_rows_with_slots_positionally():
     store_kv(k[perm], v[perm], k_cache_b, v_cache_b, slot_mapping[perm])
 
     torch.testing.assert_close(k_cache_a, k_cache_b)
+
+
+def test_store_kv_writes_through_a_strided_layer_view():
+    """The engine hands each layer pool[:, l] of a block-first pool. Writes must land in that
+    layer of the pool and leave every other layer untouched."""
+    num_layers = 3
+    shape = (NUM_BLOCKS, num_layers, BLOCK_SIZE, NUM_KV_HEADS, HEAD_DIM)
+    k_pool, v_pool = torch.zeros(shape), torch.zeros(shape)
+    k_cache, v_cache = k_pool[:, 1], v_pool[:, 1]
+    assert not k_cache.is_contiguous()
+    slot_mapping = torch.tensor([12, 13, -1, 4])
+    k = torch.randn(4, NUM_KV_HEADS, HEAD_DIM)
+    v = torch.randn(4, NUM_KV_HEADS, HEAD_DIM)
+
+    store_kv(k, v, k_cache, v_cache, slot_mapping)
+
+    for row, (block, offset) in ((0, (3, 0)), (1, (3, 1)), (3, (1, 0))):
+        torch.testing.assert_close(k_pool[block, 1, offset], k[row])
+        torch.testing.assert_close(v_pool[block, 1, offset], v[row])
+    assert k_pool[:, 0].eq(0).all() and k_pool[:, 2].eq(0).all(), "other layers untouched"
+    assert k_pool.ne(0).any(dim=(-1, -2)).sum() == 3, "exactly three slots written; padding skipped"
