@@ -24,8 +24,8 @@ class FakeKV:
         self.slots[dst][:num_slots] = self.slots[src][:num_slots]
 
 
-def make(num_blocks: int = 12) -> KVCacheManager:
-    return KVCacheManager(FakeKV(num_blocks))
+def make(num_blocks: int = 12, caching: bool = True) -> KVCacheManager:
+    return KVCacheManager(FakeKV(num_blocks), caching=caching)
 
 
 def forward(m: KVCacheManager, seq_id: int) -> None:
@@ -57,7 +57,7 @@ def check_invariants(m: KVCacheManager) -> None:
         assert len(s.block_table) == -(-s.committed // B)
         for pos in range(s.committed):  # our slots hold our tokens' KV
             assert m.storage.slots[s.block_table[pos // B]][pos % B] == s.token_ids[pos]
-        for i in range(s.committed // B):  # every full committed block is in the tree, chained
+        for i in range(s.committed // B if m.caching else 0):  # every full committed block is in the tree, chained
             node = tree.nodes[s.block_table[i]]
             assert node.tokens == tuple(s.token_ids[i * B : (i + 1) * B])
             assert node.parent is (tree.nodes[s.block_table[i - 1]] if i else tree.root)
@@ -69,6 +69,8 @@ def check_invariants(m: KVCacheManager) -> None:
     assert sorted(m.free_uncached_blocks) == sorted(b for b in free if b not in tree.nodes)
     assert m.num_free_cached == sum(1 for b in free if b in tree.nodes)
 
+    if not m.caching:
+        assert not tree.nodes, "with caching off nothing is ever published"
     for b, node in tree.nodes.items():
         assert node.block_id == b
         assert m.storage.slots[b][: len(node.tokens)] == list(node.tokens)
@@ -519,15 +521,66 @@ def test_bytes_per_block_matches_the_allocated_pool():
     assert KVStorage.bytes_per_block(3, 1, 2, B, torch.bfloat16) * 2 == KVStorage.bytes_per_block(3, 1, 2, B, torch.float32)
 
 
+# --- caching off and counters ------------------------------------------------------------------
+
+
+def test_caching_off_never_matches_but_fork_still_shares():
+    m = make(caching=False)
+    prefill(m, 1, list(range(10)))
+    m.release(1)
+    assert m.calculate_admission_cost(list(range(10))).prefill_tokens == 10
+    prefill(m, 2, list(range(6)))
+    m.fork(2, 3)
+    assert m.seqs[2].block_table == m.seqs[3].block_table  # parallel samples still share
+    step(m, 3, [99])  # first write past the shared partial block copies it
+    assert m.seqs[2].block_table[1] != m.seqs[3].block_table[1]
+    m.release(2)
+    m.release(3)
+    assert not m.tree.nodes and len(m.free_uncached_blocks) == m.num_blocks
+    s = m.stats()
+    assert (s.publishes, s.dedupes, s.evictions, s.partial_copies, s.cow_copies) == (0, 0, 0, 0, 1)
+    check_invariants(m)
+
+
+def test_each_counter_counts_its_event():
+    m = make(5)
+    prefill(m, 1, list(range(8)))  # two full pages
+    assert m.stats().publishes == 2
+    # Same tokens: page 0 attaches; the last token is always recomputed, so page 1's first 3 slots are
+    # copied into a new block, which then fills, duplicates page 1 and is deduped. No new page.
+    prefill(m, 2, list(range(8)))
+    s = m.stats()
+    assert (s.publishes, s.dedupes, s.partial_copies) == (2, 1, 1)
+    m.release(1)
+    m.release(2)
+    prefill(m, 3, [7] * 16)  # 4 blocks with 3 uncached free: evicts one free cached leaf
+    assert m.stats().evictions == 1
+    snapshot = m.stats()
+    m.release(3)
+    assert snapshot.blocks_in_use == 4 and m.stats().blocks_in_use == 0, "stats() is a snapshot, not a live object"
+    check_invariants(m)
+
+
+def test_a_duplicate_full_block_is_deduped():
+    m = make()
+    prefill(m, 1, [0, 1, 2])  # partial page [0, 1, 2], held
+    prefill(m, 2, [0, 1, 2])  # matches 2 slots (the last token is always recomputed): copies into its own block
+    step(m, 1, [3])
+    step(m, 2, [3])  # both blocks now hold [0, 1, 2, 3]
+    assert m.stats().dedupes == 1 and m.seqs[1].block_table == m.seqs[2].block_table
+    check_invariants(m)
+
+
 # --- random workload -------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("caching", [True, False])
 @pytest.mark.parametrize("seed", range(20))
-def test_random_workload_keeps_every_invariant(seed):
+def test_random_workload_keeps_every_invariant(seed, caching):
     """Admissions, decode and speculative steps, forks, preemptions and releases over a tiny
     vocabulary, so prefixes collide, partial matches and dedupes happen often."""
     rng = random.Random(seed)
-    m = make(10)
+    m = make(10, caching=caching)
     prefixes = [[rng.randrange(4) for _ in range(rng.randrange(1, 10))] for _ in range(4)]
     next_id = 0
     for _ in range(300):

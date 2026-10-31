@@ -23,8 +23,8 @@ def config(**overrides) -> SchedulerConfig:
     return SchedulerConfig(**{**base, **overrides})
 
 
-def make(num_blocks: int = 32, **overrides) -> Scheduler:
-    return Scheduler(config(**overrides), KVCacheManager(FakeKV(num_blocks)))
+def make(num_blocks: int = 32, caching: bool = True, **overrides) -> Scheduler:
+    return Scheduler(config(**overrides), KVCacheManager(FakeKV(num_blocks), caching=caching))
 
 
 def check_scheduler(s: Scheduler) -> None:
@@ -332,10 +332,14 @@ def test_a_group_forks_after_its_prefill_and_returns_once():
 # --- everything at once ------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("caching", [True, False])
 @pytest.mark.parametrize("seed", range(30))
-def test_random_workload_matches_unbatched_generation(seed):
+def test_random_workload_matches_unbatched_generation(seed, caching):
+    """With caching on or off, every output must equal generation with no batching and no preemption:
+    the prefix cache may change how much is computed, never what is generated."""
     rng = random.Random(seed)
     s = make(
+        caching=caching,
         num_blocks=rng.choice([12, 16, 24]),
         wait_weight=rng.choice([0.0, 0.1, 1000.0]),
         max_skip_wait=rng.choice([0.0, 0.5, 5.0]),

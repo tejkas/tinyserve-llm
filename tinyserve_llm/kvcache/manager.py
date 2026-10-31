@@ -279,7 +279,8 @@ class KVCacheManager:
         node = self.tree.nodes.get(block_id)
         if node is None:
             page = self.tree.publish(parent, block_id, tokens)
-            self.counters.publishes += 1
+            if page.block_id == block_id:
+                self.counters.publishes += 1
         elif len(node.tokens) < len(tokens):
             # Attached partial page that we are writing into
             assert node.parent is parent
