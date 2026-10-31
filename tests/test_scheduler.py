@@ -6,8 +6,8 @@ import pytest
 
 from tests.test_kvcache_manager import B, FakeKV, check_invariants, forward
 from tinyserve_llm.kvcache.manager import KVCacheManager
-from tinyserve_llm.scheduler.scheduler import RequestOutput, ScheduledSeq, Scheduler, SchedulerConfig
-from tinyserve_llm.scheduler.sequence import SamplingParams, SequenceStatus
+from tinyserve_llm.scheduler.scheduler import RequestOutput, ScheduledSeq, Scheduler, SchedulerConfig, SchedulerStats
+from tinyserve_llm.scheduler.sequence import SamplingParams, Sequence, SequenceStatus
 
 VOCAB = 8
 EOS = 1
@@ -44,10 +44,32 @@ def check_scheduler(s: Scheduler) -> None:
         assert len(group) <= group[0].params.n
 
 
+def check_step_stats(s: Scheduler, before: SchedulerStats, after: SchedulerStats, was_running: list[Sequence],
+                     preemptions_before: int, batch: list[ScheduledSeq]) -> None:
+    """The counters moved by exactly what this step's batch shows."""
+    running_ids = {q.seq_id for q in was_running}
+    decodes = [q for q in batch if q.seq.seq_id in running_ids]
+    admitted = [q for q in batch if q.seq.seq_id not in running_ids]
+    delta = {f: getattr(after, f) - getattr(before, f) for f in
+             ("admissions", "readmissions", "preemptions", "cached_tokens", "prefill_tokens", "decode_tokens")}
+    assert delta == {
+        "admissions": sum(not q.seq.num_preemptions for q in admitted),
+        "readmissions": sum(bool(q.seq.num_preemptions) for q in admitted),
+        "preemptions": sum(q.num_preemptions for q in was_running) - preemptions_before,
+        "cached_tokens": sum(q.seq.num_tokens - len(q.token_ids) for q in admitted),
+        "prefill_tokens": sum(len(q.token_ids) for q in admitted),
+        "decode_tokens": len(decodes),
+    }
+    assert (after.num_waiting, after.num_running) == (len(s.waiting), len(s.running))
+
+
 def run_step(s: Scheduler, now: float, token_for=model) -> tuple[list[ScheduledSeq], list[RequestOutput]]:
     """Fake engine step. The model reads its history from the KV slots, so a wrong feed changes the output."""
     m = s.kv
+    before, was_running = s.stats(), list(s.running)
+    preemptions_before = sum(q.num_preemptions for q in was_running)
     batch = s.schedule(now)
+    check_step_stats(s, before, s.stats(), was_running, preemptions_before, batch)
     assert sum(len(fed) for _, fed, _ in batch) <= s.config.max_num_batched_tokens
     assert len({q.seq_id for q, _, _ in batch}) == len(batch)
     sampled = []
@@ -148,6 +170,8 @@ def test_a_cached_prefix_is_not_fed_again():
     (prefill,), _ = run_step(s, 10.0)
     # release published the partial last page, so all 10 prompt tokens are cached
     assert prefill.token_ids == [7, 7]
+    stats = s.stats()
+    assert (stats.admissions, stats.cached_tokens, stats.prefill_tokens) == (2, 10, 10 + 2)
 
 
 # --- admission ---------------------------------------------------------------------------------
@@ -298,6 +322,9 @@ def test_a_sequence_preempts_itself_when_nothing_ranks_lower():
     s.kv.release(999)
     (readmit,), _ = run_step(s, 0.2)
     assert readmit.seq is victim and readmit.token_ids[-1] == victim.output_token_ids[0]  # the old pending token
+    stats = s.stats()
+    assert (stats.admissions, stats.readmissions, stats.preemptions) == (1, 1, 1)
+    assert stats.cached_tokens == 12  # release published all three full prompt blocks; only the pending token is fed
 
 
 def test_prefill_first_runs_separate_steps():
@@ -320,6 +347,8 @@ def test_a_group_forks_after_its_prefill_and_returns_once():
     rid = s.add_request(prompt, SamplingParams(max_tokens=4, n=3, ignore_eos=True), 0.0)
     (prefill,), _ = run_step(s, 0.0)
     assert prefill.num_samples == 3 and len(s.running) == 3
+    stats = s.stats()
+    assert (stats.admissions, stats.num_running) == (1, 3)  # forked samples are not admissions
     tables = [s.kv.seqs[q.seq_id].block_table for q in s.running]
     assert tables[0][0] == tables[1][0] == tables[2][0]  # the full prompt block is shared
     done = run_to_completion(s)
@@ -378,3 +407,15 @@ def test_random_workload_matches_unbatched_generation(seed, caching):
             assert q.output_token_ids == reference(prompt, params, k), (rid, k)
     m = s.kv
     assert not m.seqs and not s.groups and m.num_available_blocks() == m.num_blocks, "no block leaks"
+    if not caching:
+        assert s.stats().cached_tokens == 0
+
+
+def test_stats_returns_an_independent_snapshot():
+    s = make()
+    s.add_request([2, 3, 4], SamplingParams(max_tokens=2), 0.0)
+    snapshot = s.stats()
+    assert (snapshot.num_waiting, snapshot.prefill_tokens) == (1, 0)
+    run_to_completion(s)
+    assert (snapshot.num_waiting, snapshot.prefill_tokens) == (1, 0)
+    assert (s.stats().prefill_tokens, s.stats().decode_tokens, s.stats().num_waiting) == (3, 1, 0)

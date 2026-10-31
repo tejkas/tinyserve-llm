@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import itertools
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal, NamedTuple
 
 from tinyserve_llm.scheduler.sequence import SamplingParams, Sequence, SequenceStatus
@@ -26,6 +26,20 @@ class SchedulerConfig:
         # Decodes take their share of the budget first, so a maximum-length prompt must still fit beside them
         assert self.max_num_batched_tokens >= self.max_model_len + self.max_num_seqs, "a maximum-length prompt could never be scheduled"
 
+@dataclass(slots=True)
+class SchedulerStats:
+    """
+    Running totals since startup. The engine copies these each step and subtracts consecutive copies.
+    """
+    admissions: int = 0      # first admissions
+    readmissions: int = 0    # admissions after a preemption
+    preemptions: int = 0
+    cached_tokens: int = 0   # tokens served from the KV cache at admission
+    prefill_tokens: int = 0  # tokens fed through the model at admission
+    decode_tokens: int = 0   # one per scheduled decode
+    num_waiting: int = 0     # current queue sizes
+    num_running: int = 0
+
 class ScheduledSeq(NamedTuple):
     seq: Sequence
     token_ids: list[int]  # per step token ids, their positions start at seq.num_tokens - len(token_ids)
@@ -45,6 +59,7 @@ class Scheduler:
         self.watermark_blocks = math.ceil(config.watermark * kv.num_blocks)
         self._seq_ids = itertools.count()
         self._request_ids = itertools.count()
+        self.counters = SchedulerStats()
 
     def has_unfinished(self) -> bool:
         return bool(self.waiting or self.running)
@@ -129,6 +144,7 @@ class Scheduler:
                 break
             self.kv.append_slots(seq.seq_id, [seq.pending_token])
             scheduled.append(ScheduledSeq(seq, [seq.pending_token]))
+            self.counters.decode_tokens += 1
             self.running.append(seq)
         return scheduled
 
@@ -137,6 +153,7 @@ class Scheduler:
         self.kv.release(seq.seq_id)
         seq.status = SequenceStatus.WAITING
         seq.num_preemptions += 1
+        self.counters.preemptions += 1
         self.waiting.append(seq)
 
     def _admit(self, now: float, budget: int) -> list[ScheduledSeq]:
@@ -166,6 +183,14 @@ class Scheduler:
                 continue
             assert self.kv.allocate(seq.seq_id, token_ids) is not None  # the fit check used a fresh cost
             fed = token_ids[self.kv.num_cached_tokens(seq.seq_id):]
+
+            if seq.num_preemptions:
+                self.counters.readmissions += 1
+            else:
+                self.counters.admissions += 1
+            self.counters.cached_tokens += len(token_ids) - len(fed)
+            self.counters.prefill_tokens += len(fed)
+
             budget -= len(fed)
             owed_forks += num_forks
             seq.status = SequenceStatus.RUNNING
@@ -235,3 +260,7 @@ class Scheduler:
             done = {s.seq_id for s in finished}
             self.running = [s for s in self.running if s.seq_id not in done]
         return self._collect(finished)
+
+    def stats(self) -> SchedulerStats:
+        """A snapshot: the running totals plus current queue sizes."""
+        return replace(self.counters, num_waiting=len(self.waiting), num_running=len(self.running))
