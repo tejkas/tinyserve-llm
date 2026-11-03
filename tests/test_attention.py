@@ -99,3 +99,20 @@ def test_store_kv_writes_through_a_strided_layer_view():
         torch.testing.assert_close(v_pool[block, 1, offset], v[row])
     assert k_pool[:, 0].eq(0).all() and k_pool[:, 2].eq(0).all(), "other layers untouched"
     assert k_pool.ne(0).any(dim=(-1, -2)).sum() == 3, "exactly three slots written; padding skipped"
+
+
+def test_flash_layout_checks_name_the_problem():
+    import pytest
+
+    from tinyserve_llm.attention.flash_backend import check_paged_layout
+
+    good_cache, good_table = torch.zeros(2, 256, 1, 8), torch.zeros(1, 2, dtype=torch.int32)
+    check_paged_layout(good_cache, good_table)
+    with pytest.raises(ValueError, match="256"):
+        check_paged_layout(torch.zeros(2, 16, 1, 8), good_table)
+    with pytest.raises(TypeError, match="int32"):
+        check_paged_layout(good_cache, good_table.long())
+    with pytest.raises(ValueError, match="last dimension"):
+        check_paged_layout(good_cache, torch.zeros(1, 4, dtype=torch.int32)[:, ::2])
+    # A strided layer view of a block-first pool is fine: only head_dim must be contiguous.
+    check_paged_layout(torch.zeros(2, 3, 256, 1, 8)[:, 1], good_table)
