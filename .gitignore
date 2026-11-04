@@ -16,3 +16,6 @@ DELTAS.md
 
 # Slurm job logs
 logs/
+
+# Downloaded datasets, tokenizers and built traces
+benchmarks/data/
