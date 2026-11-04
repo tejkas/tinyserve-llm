@@ -12,6 +12,7 @@
 #SBATCH --output=logs/%x-%j.out
 
 set -euo pipefail
+export TERM=xterm-256color  # the submitting terminal's TERM may be unknown on the node
 source scripts/gpu_env.sh
 PY="$VENV/bin/python"
 [ -x "$PY" ] || { echo "no environment at $VENV: run scripts/gpu_setup.sh on a login node first"; exit 1; }

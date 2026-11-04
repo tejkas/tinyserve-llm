@@ -13,3 +13,6 @@ benchmarks/figures/
 DESIGN.md
 SPEC.md
 DELTAS.md
+
+# Slurm job logs
+logs/
