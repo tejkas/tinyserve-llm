@@ -24,7 +24,7 @@ from tinyserve_llm.engine.llm_engine import LLM  # noqa: E402
 from tinyserve_llm.engine.model_runner import PagedAttention, prepare  # noqa: E402
 from tinyserve_llm.kvcache.storage import KVStorage  # noqa: E402
 from tinyserve_llm.model.attention import DenseCausalAttention  # noqa: E402
-from tinyserve_llm.model.loader import load_llama  # noqa: E402
+from tinyserve_llm.model.loader import load_model  # noqa: E402
 from tinyserve_llm.scheduler.scheduler import SchedulerConfig  # noqa: E402
 from tinyserve_llm.scheduler.sequence import SamplingParams  # noqa: E402
 
@@ -89,7 +89,7 @@ def checkpoint(tmp_path_factory):
 def test_the_runner_with_flash_matches_dense_attention_through_prefill_and_decode(checkpoint):
     """Real scheduler, cache and packing; only the attention backend differs from the dense oracle."""
     dtype = torch.bfloat16
-    model = load_llama(str(checkpoint), dtype=dtype, device=CUDA)
+    model = load_model(str(checkpoint), dtype=dtype, device=CUDA)
     shape = ModelShape.from_hf_config(model.config, dtype)
     config = SchedulerConfig(max_model_len=128, max_num_seqs=4, max_num_batched_tokens=132)
     scheduler, view = build(8, shape, config, CacheConfig(block_size=B, device="cuda"))

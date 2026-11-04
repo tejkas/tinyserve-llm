@@ -16,7 +16,7 @@ import torch
 
 from tinyserve_llm.engine.interface import CacheConfig, CacheStats, ModelShape, build, bytes_per_block
 from tinyserve_llm.engine.model_runner import AttentionImpl, ModelRunner
-from tinyserve_llm.model.loader import load_llama
+from tinyserve_llm.model.loader import load_model
 from tinyserve_llm.scheduler.scheduler import RequestOutput, Scheduler, SchedulerConfig, SchedulerStats
 from tinyserve_llm.scheduler.sequence import SamplingParams
 
@@ -78,7 +78,7 @@ class LLM:
             load_tokenizer: bool = True,
     ) -> None:
         self.device = torch.device(cache_config.device)
-        self.model = load_llama(model_path, dtype=dtype, device=self.device)
+        self.model = load_model(model_path, dtype=dtype, device=self.device)
         config = self.model.config
         assert scheduler_config.max_model_len <= config.max_position_embeddings
         self.tokenizer = None

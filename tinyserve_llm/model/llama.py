@@ -26,7 +26,7 @@ COMPILE = os.environ.get("TINYSERVE_COMPILE", "1") != "0"
 
 
 def maybe_compile(fn: Callable) -> Callable:
-    """torch.compile, the same kernels nano-vllm compiles, unless COMPILE is off."""
+    """torch.compile on the same kernels nano-vllm compiles, unless COMPILE is off."""
     compiled = torch.compile(fn)  # lazy: nothing compiles until the first call
 
     @functools.wraps(fn)

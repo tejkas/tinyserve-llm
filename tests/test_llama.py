@@ -17,7 +17,7 @@ from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS
 from tinyserve_llm.model import llama
 from tinyserve_llm.model.attention import DenseCausalAttention
 from tinyserve_llm.model.llama import LlamaForCausalLM, RotaryEmbedding, rope_settings
-from tinyserve_llm.model.loader import load_llama, load_weights
+from tinyserve_llm.model.loader import load_model, load_weights
 
 # Small original window so the llama3 scaling touches low, medium and high frequencies alike.
 ROPE = {
@@ -77,7 +77,7 @@ def save_checkpoint(model: HFLlamaForCausalLM, path) -> None:
 
 def ours_from(hf: HFLlamaForCausalLM, path) -> LlamaForCausalLM:
     save_checkpoint(hf, path)
-    return load_llama(str(path), dtype=torch.float32, device="cpu")
+    return load_model(str(path), dtype=torch.float32, device="cpu")
 
 
 @torch.no_grad()

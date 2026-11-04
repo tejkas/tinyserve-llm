@@ -1,7 +1,7 @@
 # Adapted from nano-vllm (https://github.com/GeeeekExplorer/nano-vllm), MIT License,
 # Copyright (c) 2025 Xingkai Yu. Based on nanovllm/utils/loader.py.
 
-"""Load a Hugging Face Llama checkpoint directory (config.json + model*.safetensors)."""
+"""Load a Hugging Face checkpoint directory (config.json + model*.safetensors) into our model for its type."""
 
 from __future__ import annotations
 
@@ -13,9 +13,16 @@ from safetensors import safe_open
 from torch import nn
 
 from tinyserve_llm.model.llama import LlamaForCausalLM, MergedLinear
+from tinyserve_llm.model.qwen3 import Qwen3ForCausalLM
 
 # Buffers some older checkpoints serialise; we recompute them.
 IGNORED_SUFFIXES = ("rotary_emb.inv_freq",)
+
+# config.json's model_type -> our model class
+MODELS: dict[str, type[nn.Module]] = {
+    "llama": LlamaForCausalLM,
+    "qwen3": Qwen3ForCausalLM,
+}
 
 
 def load_weights(model: nn.Module, path: str) -> None:
@@ -63,11 +70,11 @@ def load_weights(model: nn.Module, path: str) -> None:
         raise ValueError(f"checkpoint did not fill: {missing}")
 
 
-def load_llama(
+def load_model(
         path: str,
         dtype: torch.dtype = torch.bfloat16,
         device: str | torch.device = "cuda",
-) -> LlamaForCausalLM:
+) -> nn.Module:
     """
     Build the model directly in `dtype` on `device` and load its weights. Building under the
     default dtype (not .to(dtype) afterwards) keeps the RoPE table in fp32.
@@ -75,11 +82,13 @@ def load_llama(
     from transformers import AutoConfig
 
     config = AutoConfig.from_pretrained(path)
+    if config.model_type not in MODELS:
+        raise NotImplementedError(f"model_type {config.model_type!r} is not supported; have {sorted(MODELS)}")
     previous = torch.get_default_dtype()
     torch.set_default_dtype(dtype)
     try:
         with torch.device(device):
-            model = LlamaForCausalLM(config)
+            model = MODELS[config.model_type](config)
     finally:
         torch.set_default_dtype(previous)
     load_weights(model, path)
