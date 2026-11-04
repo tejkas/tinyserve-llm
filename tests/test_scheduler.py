@@ -129,6 +129,24 @@ def test_add_request_rejects_what_could_never_run():
     assert not s.waiting
 
 
+
+def test_a_request_accepted_at_the_bound_can_always_be_admitted():
+    """
+    A partial copy out of a free cached page needs the source and a fresh block at once, so a 2-block
+    request can cost 3. add_request must count that, or a request accepted into a 2-block pool could
+    never be admitted.
+    """
+    with pytest.raises(ValueError, match="blocks"):
+        make(num_blocks=2).add_request([5, 6, 7, 8, 9, 12], SamplingParams(max_tokens=1), 0.0)
+
+    s = make(num_blocks=3)
+    s.add_request([5, 6, 7, 8, 9, 10, 11], SamplingParams(max_tokens=1, ignore_eos=True), 0.0)
+    run_to_completion(s)  # leaves a full page [5, 6, 7, 8] and a free partial page [9, 10, 11]
+    s.add_request([5, 6, 7, 8, 9, 12], SamplingParams(max_tokens=1, ignore_eos=True), 1.0)
+    batch, _ = run_step(s, 1.0)
+    assert len(batch) == 1 and batch[0].token_ids == [12]  # 5 tokens cached, one of them copied
+    assert s.kv.stats().partial_copies == 1
+
 # --- one request -------------------------------------------------------------------------------
 
 
@@ -310,12 +328,12 @@ def test_the_victim_is_the_lowest_score_by_admission_hit():
 
 
 def test_a_sequence_preempts_itself_when_nothing_ranks_lower():
-    s = make(num_blocks=4)
+    s = make(num_blocks=5)  # the request's bound: 4 blocks at full length, plus 1 for a partial copy
     s.add_request([2] * 12, SamplingParams(max_tokens=4, ignore_eos=True), 0.0)  # 3 full blocks
     run_step(s, 0.0)
-    s.kv.allocate(999, [9] * 4)  # something outside the scheduler takes the last block
+    s.kv.allocate(999, [9] * 8)  # something outside the scheduler takes the last two blocks
     forward(s.kv, 999)
-    s.kv.commit(999, 4)
+    s.kv.commit(999, 8)
     assert s.schedule(0.1) == []
     (victim,) = s.waiting
     assert victim.num_preemptions == 1 and not s.running and victim.seq_id not in s.kv.seqs

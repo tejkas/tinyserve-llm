@@ -73,7 +73,8 @@ class Scheduler:
         if max_len > self.config.max_model_len:
             raise ValueError(f"prompt + max_tokens = {max_len} exceeds max_model_len")
         # Conservative: one sequence at full length, plus the group's fork copies, plus the watermark
-        max_blocks = -(-max_len // self.kv.block_size) + (params.n - 1) + self.watermark_blocks
+        # Bugfix: Need to add an extra block +1 for reserving a partially cached page while slots are copied
+        max_blocks = -(-max_len // self.kv.block_size) + (params.n - 1) + self.watermark_blocks + 1
         if max_blocks > self.kv.num_blocks:
             raise ValueError(f"needs up to {max_blocks} blocks; the KV cache has {self.kv.num_blocks}")
         if params.n > self.config.max_num_seqs:
