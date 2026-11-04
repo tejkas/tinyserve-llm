@@ -10,7 +10,8 @@ dependencies = [
 
 [project.optional-dependencies]
 # flash-attn is CUDA-only; the KV cache manager and the PyTorch reference run without it.
-# Install with: pip install -e ".[cuda]" --no-build-isolation
+# On the cluster use scripts/gpu_setup.sh: it pins torch 2.8 and installs flash-attn's prebuilt wheel,
+# since installing this extra directly compiles flash-attn from source.
 cuda = [
     "flash-attn >= 2.6",
     "triton >= 2.1",
