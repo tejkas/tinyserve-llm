@@ -105,9 +105,14 @@ def next_seq_id() -> int:
 
 
 def warm_up(engine: NanoEngine, max_model_len: int) -> None:
-    """The same prompts as run_ours' warm-up, so both engines compile the same shapes before timing."""
+    """
+    run_ours' warm-up prompts, then one batch of two. nano-vllm's torch.compile'd sampler is
+    specialized to a batch of one until it sees a larger batch, so without the pair it recompiles
+    inside the first timed wave (about a second, all of it counted as time to first token).
+    """
     for n in (17, 300, 1100):
         engine.generate([[7] * min(n, max_model_len - 4)], [4])
+    engine.generate([[7] * 17, [8] * 300], [4, 4])
     torch.cuda.synchronize()
 
 
