@@ -1,5 +1,5 @@
 #!/bin/bash
-# One-time setup on a rented single-GPU Linux machine without Slurm (e.g. a Lambda Labs H100).
+# One-time setup on a rented Linux GPU machine without Slurm (e.g. Lambda Labs H100s).
 # From the repo root:
 #   bash scripts/lambda_setup.sh
 # Builds two environments on the same torch and flash-attn: ours (~/venvs/tinyserve) and stock
