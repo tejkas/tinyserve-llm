@@ -2,7 +2,7 @@
 # The nano-vllm comparison on a rented Linux GPU machine without Slurm, from the repo root, after
 # scripts/lambda_setup.sh:
 #   bash scripts/lambda_bench.sh smoke     # 50 conversations, 5 waves, one repeat: check both runners work
-#   bash scripts/lambda_bench.sh grid      # 300 conversations, rho 0.6/1/2, 3 repeats
+#   bash scripts/lambda_bench.sh grid      # 300 conversations, rho 0.6/1/2, one run each
 # Finished runs are skipped, so rerunning after an interruption resumes. Run it under tmux or nohup:
 # an SSH disconnect would otherwise stop it.
 #
@@ -21,7 +21,8 @@ MODE=${1:-}
 case "$MODE" in
     smoke) RHOS=1; common=(--conversations 50 --max-waves 5 --repeats 1 --tag smoke --out-dir benchmarks/results/qwen_smoke) ;;
     # rho 0.6, not 0.5: 300 Qwen conversations at 0.5 need ~72 GiB of KV, more than an 80 GB card leaves.
-    grid)  RHOS=0.6,1,2; common=(--conversations 300 --repeats 3 --out-dir benchmarks/results/qwen) ;;
+    # One run each: on a Llama rehearsal, three repeats agreed to ~0.01% on prefill tokens and <1% on tok/s.
+    grid)  RHOS=0.6,1,2; common=(--conversations 300 --repeats 1 --out-dir benchmarks/results/qwen) ;;
     *) echo "usage: bash scripts/lambda_bench.sh smoke|grid"; exit 1 ;;
 esac
 mkdir -p logs

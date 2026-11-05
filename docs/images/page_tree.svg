@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 560" width="860" height="560" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8c8b86"/>
+    </marker>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#2a78d6"/>
+    </marker>
+  </defs>
+  <rect width="860" height="560" fill="#fcfcfb"/>
+
+  <!-- level 1: the page tree -->
+  <text x="24" y="30" font-size="13" font-weight="700" fill="#0b0b0b">Level 1 — the page tree (one node per 256-token KV page)</text>
+
+  <circle cx="44" cy="96" r="6" fill="#0b0b0b"/>
+  <text x="44" y="122" font-size="12" fill="#52514e" text-anchor="middle">root</text>
+  <line x1="50" y1="96" x2="96" y2="96" stroke="#2a78d6" stroke-width="2" marker-end="url(#arrow-blue)"/>
+
+  <rect x="98" y="72" width="200" height="48" rx="6" fill="#eaf2fc" stroke="#2a78d6" stroke-width="2"/>
+  <text x="198" y="92" font-size="13" font-weight="700" fill="#0b0b0b" text-anchor="middle">page A · 256 tokens</text>
+  <text x="198" y="110" font-size="12" fill="#52514e" text-anchor="middle">a shared system prompt</text>
+
+  <line x1="298" y1="96" x2="478" y2="62" stroke="#8c8b86" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="298" y1="96" x2="478" y2="112" stroke="#2a78d6" stroke-width="2" marker-end="url(#arrow-blue)"/>
+  <line x1="298" y1="96" x2="478" y2="162" stroke="#8c8b86" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <rect x="480" y="44" width="300" height="36" rx="6" fill="#fcfcfb" stroke="#8c8b86" stroke-width="1.5"/>
+  <text x="494" y="67" font-size="12" fill="#0b0b0b"><tspan font-weight="700">B1</tspan> · 256 tokens · “The user wants …”</text>
+  <rect x="480" y="94" width="300" height="36" rx="6" fill="#eaf2fc" stroke="#2a78d6" stroke-width="2"/>
+  <text x="494" y="117" font-size="12" fill="#0b0b0b"><tspan font-weight="700">B2</tspan> · 140 tokens · “The user asks how …”</text>
+  <rect x="480" y="144" width="300" height="36" rx="6" fill="#fcfcfb" stroke="#8c8b86" stroke-width="1.5"/>
+  <text x="494" y="167" font-size="12" fill="#0b0b0b"><tspan font-weight="700">B3</tspan> · 90 tokens · “Please summarize …”</text>
+
+  <text x="480" y="202" font-size="12" fill="#52514e">A’s children: dict of exact token tuple → page</text>
+
+  <!-- level 2: page A's token trie -->
+  <rect x="24" y="226" width="812" height="186" rx="8" fill="none" stroke="#8c8b86" stroke-width="1.2" stroke-dasharray="5 4"/>
+  <text x="40" y="250" font-size="13" font-weight="700" fill="#0b0b0b">Level 2 — page A’s token trie, built over its children’s tokens</text>
+  <line x1="198" y1="120" x2="198" y2="226" stroke="#8c8b86" stroke-width="1.2" stroke-dasharray="3 3"/>
+
+  <!-- trie nodes -->
+  <circle cx="64" cy="310" r="6" fill="#0b0b0b"/>
+
+  <g font-size="12" text-anchor="middle">
+    <rect x="120" y="294" width="78" height="30" rx="5" fill="#eaf2fc" stroke="#2a78d6" stroke-width="2"/>
+    <text x="159" y="314" fill="#0b0b0b">“The”</text>
+    <text x="159" y="341" fill="#52514e">{B1, B2}</text>
+
+    <rect x="250" y="294" width="78" height="30" rx="5" fill="#eaf2fc" stroke="#2a78d6" stroke-width="2"/>
+    <text x="289" y="314" fill="#0b0b0b">“user”</text>
+    <text x="289" y="341" fill="#52514e">{B1, B2}</text>
+
+    <rect x="380" y="264" width="78" height="30" rx="5" fill="#fcfcfb" stroke="#8c8b86" stroke-width="1.5"/>
+    <text x="419" y="284" fill="#0b0b0b">“wants”</text>
+    <text x="500" y="284" fill="#52514e">{B1} …</text>
+
+    <rect x="380" y="320" width="78" height="30" rx="5" fill="#eaf2fc" stroke="#2a78d6" stroke-width="2"/>
+    <text x="419" y="340" fill="#0b0b0b">“asks”</text>
+    <text x="500" y="340" fill="#52514e">{B2} …</text>
+
+    <rect x="120" y="364" width="78" height="30" rx="5" fill="#fcfcfb" stroke="#8c8b86" stroke-width="1.5"/>
+    <text x="159" y="384" fill="#0b0b0b">“Please”</text>
+    <text x="240" y="384" fill="#52514e">{B3} …</text>
+  </g>
+
+  <line x1="70" y1="310" x2="118" y2="309" stroke="#2a78d6" stroke-width="2" marker-end="url(#arrow-blue)"/>
+  <line x1="198" y1="309" x2="248" y2="309" stroke="#2a78d6" stroke-width="2" marker-end="url(#arrow-blue)"/>
+  <line x1="328" y1="303" x2="378" y2="282" stroke="#8c8b86" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="328" y1="315" x2="378" y2="332" stroke="#2a78d6" stroke-width="2" marker-end="url(#arrow-blue)"/>
+  <line x1="68" y1="315" x2="118" y2="374" stroke="#8c8b86" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <text x="560" y="300" font-size="12" fill="#52514e">Each trie node keeps the set of</text>
+  <text x="560" y="316" font-size="12" fill="#52514e">child pages passing through it,</text>
+  <text x="560" y="332" font-size="12" fill="#52514e">so the deepest node reached</text>
+  <text x="560" y="348" font-size="12" fill="#52514e">names the pages to reuse.</text>
+
+  <!-- the lookup -->
+  <text x="24" y="444" font-size="13" font-weight="700" fill="#2a78d6">A new turn of B2’s conversation: A’s 256 tokens, then “The user asks how … [reply] [next message]”</text>
+  <text x="24" y="470" font-size="12" fill="#0b0b0b">1. Walk full pages: the first 256 tokens are a key in root’s dict, so page A is reused as is.</text>
+  <text x="24" y="492" font-size="12" fill="#0b0b0b">2. The next 256 tokens are no child’s exact key (B2 holds only 140), so walk A’s trie: all 140 of B2’s tokens match.</text>
+  <text x="24" y="514" font-size="12" fill="#0b0b0b">3. Every recorded token matched, so B2 is attached and the new tokens are written after its slot 140.</text>
+  <text x="24" y="540" font-size="12" fill="#52514e">Had the query diverged partway through B2, its matched slots would be copied into a fresh page instead: the rest of B2 belongs to someone else.</text>
+</svg>
