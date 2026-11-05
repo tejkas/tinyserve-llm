@@ -21,6 +21,7 @@ is plain JSON of token ids; building one needs a Hugging Face tokenizer, replayi
 from __future__ import annotations
 
 import json
+import math
 import random
 import time
 from dataclasses import asdict, dataclass, field
@@ -166,6 +167,18 @@ def peak_demand(trace: list[Conversation]) -> tuple[int, int]:
         if tokens > best:
             best, best_k = tokens, k
     return best, best_k
+
+
+BLOCK_SIZE = 256  # flash-attn's paged-KV minimum, used by both engines
+
+
+def blocks_for(demand_tokens: int, rho: float, max_model_len: int) -> int:
+    """
+    Capacity for a target pressure, but never less than one maximum-length request plus three blocks:
+    the source page of a partial copy, the admission watermark, and one spare. Below that the scheduler
+    would reject a maximum-length request outright. Real runs sit far above this floor.
+    """
+    return max(math.ceil(demand_tokens / rho / BLOCK_SIZE), math.ceil(max_model_len / BLOCK_SIZE) + 3)
 
 
 # --- the replay --------------------------------------------------------------------------------------

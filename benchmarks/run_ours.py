@@ -12,19 +12,18 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import time
 from dataclasses import asdict
 
 import torch
 
-from benchmarks.multiturn import WaveRecord, WaveResult, load_trace, peak_demand, replay, summarize
+from benchmarks.multiturn import (BLOCK_SIZE, WaveRecord, WaveResult, blocks_for, load_trace, peak_demand,
+                                  replay, summarize)
 from tinyserve_llm.engine.interface import CacheConfig
 from tinyserve_llm.engine.llm_engine import LLM
 from tinyserve_llm.scheduler.scheduler import SchedulerConfig
 from tinyserve_llm.scheduler.sequence import SamplingParams
 
-BLOCK_SIZE = 256
 MAX_NUM_SEQS = 512
 
 
@@ -46,15 +45,6 @@ class OursEngine:
             prefill_tokens=after.prefill_tokens - before.prefill_tokens,  # includes recompute after preemption
             preemptions=after.preemptions - before.preemptions,
         )
-
-
-def blocks_for(demand_tokens: int, rho: float, max_model_len: int) -> int:
-    """
-    Capacity for a target pressure, but never less than one maximum-length request plus three blocks:
-    the source page of a partial copy, the admission watermark, and one spare. Below that the scheduler
-    would reject a maximum-length request outright. Real runs sit far above this floor.
-    """
-    return max(math.ceil(demand_tokens / rho / BLOCK_SIZE), math.ceil(max_model_len / BLOCK_SIZE) + 3)
 
 
 def warm_up(engine: OursEngine, max_model_len: int) -> None:
